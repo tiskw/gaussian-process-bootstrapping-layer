@@ -1,0 +1,8 @@
+# Ignore dataset directory.
+dataset/
+
+# Ignore Python cache directory.
+__pycache__/
+
+# Ignore nohup files.
+nohup.out
