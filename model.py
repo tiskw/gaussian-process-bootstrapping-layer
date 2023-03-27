@@ -98,7 +98,7 @@ class GaussianProcessBootstrapping(torch.nn.Module):
         return torch.transpose(self.forward_rank2(torch.flatten(X_2dim, start_dim=1)).reshape(X_3dim.shape), 1, 3)
 
 
-def LeNet5(gpb_layer_pos="", std_error=1.0, skip=100):
+def LeNet5(num_classes, gpb_layer_pos="", std_error=1.0, skip=100, pretrain=False):
     """
     Returns LeNet model instance.
 
@@ -145,23 +145,20 @@ def LeNet5(gpb_layer_pos="", std_error=1.0, skip=100):
         layers += [("block3_gpbl", GaussianProcessBootstrapping(std_error=std_error, skip=skip))]
 
     # LeNet5: 4th block.
-    layers += [("block4_full", torch.nn.Linear(500, 10))]
+    layers += [("block4_full", torch.nn.Linear(500, num_classes))]
 
     return torch.nn.Sequential(collections.OrderedDict(layers))
 
 
-def ResNet18(gpb_layer_pos="", std_error=0.1, scale=1.0, skip=100):
+def ResNet18(num_classes, gpb_layer_pos="", std_error=0.1, scale=1.0, skip=100, pretrain=False):
     """
     """
-    base_model = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.IMAGENET1K_V1)
-
-    base_model.conv1 = torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-    base_model.fc = torch.nn.Linear(512, 10)
+    base_model = torchvision.models.resnet18(weights=torchvision.models.ResNet18_Weights.IMAGENET1K_V1 if pretrain else None)
 
     layers = [
-        ("conv1",   base_model.conv1),
-        ("bn1",     base_model.bn1),
-        ("relu",    base_model.relu),
+        ("conv1", torch.nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)),
+        ("bn1",   base_model.bn1),
+        ("relu",  base_model.relu),
         # ("maxpool", base_model.maxpool),
     ]
 
@@ -197,7 +194,7 @@ def ResNet18(gpb_layer_pos="", std_error=0.1, scale=1.0, skip=100):
         layers += [("gpbl5", GaussianProcessBootstrapping(std_error=std_error, scale=scale, skip=skip))]
 
     layers += [
-        ("fc", base_model.fc),
+        ("fc", torch.nn.Linear(512, num_classes)),
     ]
 
     return torch.nn.Sequential(collections.OrderedDict(layers))

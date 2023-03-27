@@ -12,7 +12,7 @@ import torch
 import torchmetrics
 import torchvision
 
-from model import LeNet5, ResNet18
+from model import LeNet5, ResNet18, update_gpbl_scale
 
 
 def parse_args():
@@ -27,6 +27,8 @@ def parse_args():
     group1 = parser.add_argument_group("Model options")
     group1.add_argument("--model", metavar="NAME", type=str, default="resnet18",
                         help="name of neural network model")
+    group1.add_argument("--use_pretrain", action="store_true",
+                        help="use pretrained weights")
 
     # Define group 2: GPB layer options.
     group2 = parser.add_argument_group("GPB layer options")
@@ -56,20 +58,25 @@ def parse_args():
                         help="number of training epochs")
     group4.add_argument("--n_cpus", metavar="INT", type=int, default=4,
                         help="number of available CPUs")
-    group4.add_argument("--save", metavar="PATH", type=str, default=None,
-                        help="path to save trained model")
+
+    # Define group 5: output options.
+    group5 = parser.add_argument_group("Output options")
+    group5.add_argument("--log", metavar="PATH", type=str, default=None,
+                        help="path to log file")
+    group5.add_argument("--save", metavar="PATH", type=str, default=None,
+                        help="path to trained weights")
 
     # Define group 5: other options.
-    group5 = parser.add_argument_group("Other options")
-    group5.add_argument("-h", "--help", action="help",
+    group6 = parser.add_argument_group("Other options")
+    group6.add_argument("-h", "--help", action="help",
                         help="show this message and exit")
-    group5.add_argument("-v", "--version", action="version", version="",
+    group6.add_argument("-v", "--version", action="version", version="",
                         help="show version info and exit")
 
     return parser.parse_args()
 
 
-def train(model, dataloader, loss_func, optimizer, scheduler=None):
+def train(model, dataloader, loss_func, n_cls, optimizer, scheduler=None):
     """
     Train NN model.
 
@@ -85,7 +92,7 @@ def train(model, dataloader, loss_func, optimizer, scheduler=None):
 
     # Define and instanciate metrics.
     metrics = {"train/loss": torchmetrics.MeanMetric(),
-               "train/acc" : torchmetrics.Accuracy(task="multiclass", num_classes=10)}
+               "train/acc" : torchmetrics.Accuracy(task="multiclass", num_classes=n_cls)}
 
     # Transition to traning mode.
     model.train()
@@ -94,8 +101,8 @@ def train(model, dataloader, loss_func, optimizer, scheduler=None):
     for images, labels in rich.progress.track(dataloader, total=len(dataloader), transient=True):
 
         # Move images/labels to the target device.
-        images = images.to(device)
-        labels = labels.to(device)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
         # Initialize optimizer.
         optimizer.zero_grad()
@@ -120,7 +127,7 @@ def train(model, dataloader, loss_func, optimizer, scheduler=None):
     return {key:float(metric.compute()) for key, metric in metrics.items()}
 
 
-def test(model, dataloader, loss_func):
+def test(model, dataloader, loss_func, n_cls):
     """
     Test NN model.
 
@@ -134,7 +141,7 @@ def test(model, dataloader, loss_func):
 
     # Define and instanciate metrics.
     metrics = {"test/loss": torchmetrics.MeanMetric(),
-               "test/acc" : torchmetrics.Accuracy(task="multiclass", num_classes=10)}
+               "test/acc" : torchmetrics.Accuracy(task="multiclass", num_classes=n_cls)}
 
     # Transition to evaluation mode.
     model.eval()
@@ -143,8 +150,8 @@ def test(model, dataloader, loss_func):
     for images, labels in rich.progress.track(dataloader, total=len(dataloader), transient=True):
 
         # Move images/labels to the target device.
-        images = images.to(device)
-        labels = labels.to(device)
+        images = images.to(device, non_blocking=True)
+        labels = labels.to(device, non_blocking=True)
 
         # Compute model output and loss value.
         output = model(images)
@@ -168,17 +175,15 @@ def main(args):
     # Dump arguments.
     print("args =", args)
 
-    # Create NN model instance.
-    # model = LeNet5(gpb_layer_pos=args.gpb_layer_pos, std_error=args.std_error)
-    model = ResNet18(gpb_layer_pos=args.gpb_layer_pos, std_error=args.gpb_std_error)
-    model.to(args.device)
-    print(model)
+    # Enables cuDNN's benchmark multiple convolution algorithms.
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
 
     # Setup transforms.
     transform_train = torchvision.transforms.Compose([
         torchvision.transforms.RandomCrop(32, padding=4),
         torchvision.transforms.RandomHorizontalFlip(),
-        torchvision.transforms.RandomRotation(15),
+        # torchvision.transforms.RandomRotation(15),
         torchvision.transforms.ToTensor(),
         torchvision.transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
@@ -188,14 +193,28 @@ def main(args):
     ])
 
     # Setup dataset.
-    ds_common_args = {"download": True}
-    dataset_train  = torchvision.datasets.CIFAR10("dataset", train=True,  transform=transform_train, **ds_common_args)
-    dataset_test   = torchvision.datasets.CIFAR10("dataset", train=False, transform=transform_test,  **ds_common_args)
+    if args.dataset == "cifar10":
+        ds_common_args = {"root": "dataset", "download": True}
+        dataset_train  = torchvision.datasets.CIFAR10(train=True,  transform=transform_train, **ds_common_args)
+        dataset_test   = torchvision.datasets.CIFAR10(train=False, transform=transform_test,  **ds_common_args)
+        num_classes    = 10
+    elif args.dataset == "cifar100":
+        ds_common_args = {"root": "dataset", "download": True}
+        dataset_train  = torchvision.datasets.CIFAR100(train=True,  transform=transform_train, **ds_common_args)
+        dataset_test   = torchvision.datasets.CIFAR100(train=False, transform=transform_test,  **ds_common_args)
+        num_classes    = 100
 
     # Setup data loader.
-    dl_common_args   = {"batch_size": args.batch_size, "num_workers": args.n_cpus}
+    dl_common_args   = {"batch_size": args.batch_size, "num_workers": args.n_cpus, "pin_memory": True}
     dataloader_train = torch.utils.data.DataLoader(dataset_train, shuffle=True,  **dl_common_args)
     dataloader_test  = torch.utils.data.DataLoader(dataset_test , shuffle=False, **dl_common_args)
+
+    # Create NN model instance.
+    model_common_args = {"gpb_layer_pos": args.gpb_layer_pos, "std_error": args.gpb_std_error, "pretrain": args.use_pretrain}
+    if   args.model == "lenet5"  : model = LeNet5(num_classes, **model_common_args)
+    elif args.model == "resnet18": model = ResNet18(num_classes, **model_common_args)
+    model.to(args.device)
+    print(model)
 
     # Define loss function.
     loss_func = torch.nn.CrossEntropyLoss(reduction="mean", label_smoothing=0.1)
@@ -212,10 +231,10 @@ def main(args):
             model = update_gpbl_scale(model, scale)
 
         # Train the model for one epoch and get metrics.
-        result_train = train(model, dataloader_train, loss_func, optimizer, scheduler)
+        result_train = train(model, dataloader_train, loss_func, num_classes, optimizer, scheduler)
 
         # Test the model and get metrics.
-        result_test = test(model, dataloader_test, loss_func)
+        result_test = test(model, dataloader_test, loss_func, num_classes)
 
         # Print metrics.
         result = dict(**result_train, **result_test)
