@@ -32,14 +32,16 @@ def parse_args():
 
     # Define group 2: GPB layer options.
     group2 = parser.add_argument_group("GPB layer options")
-    group2.add_argument("--gpb_dec_epochs", metavar="INT", default=None, type=int,
-                        help="decrease GPBLayer effect last few epochs")
+    group2.add_argument("--gpb_disable_epochs", metavar="INT", default=None, type=int,
+                        help="disables GPBLayer effect in the last few epochs")
     group2.add_argument("--gpb_layer_pos", metavar="STR", default="", type=str,
                         help="position of GPB layers in a neural network")
     group2.add_argument("--gpb_max_scale", metavar="FLT", type=float, default=1.0,
                         help="scale of noise applied in GPB layers")
     group2.add_argument("--gpb_std_error", metavar="FLT", type=float, default=0.2,
                         help="standard deviation of observation")
+    group2.add_argument("--gpb_scale", metavar="FLT", type=float, default=1.0,
+                        help="scale of GPB layers")
 
     # Define group 3: dataset options.
     group3 = parser.add_argument_group("Dataset options")
@@ -185,11 +187,13 @@ def main(args):
         torchvision.transforms.RandomHorizontalFlip(),
         # torchvision.transforms.RandomRotation(15),
         torchvision.transforms.ToTensor(),
-        torchvision.transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        # torchvision.transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        torchvision.transforms.Normalize((0.49137, 0.48235, 0.44667), (0.24706, 0.24353, 0.26157)),
     ])
     transform_test = torchvision.transforms.Compose([
         torchvision.transforms.ToTensor(),
-        torchvision.transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        # torchvision.transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        torchvision.transforms.Normalize((0.49137, 0.48235, 0.44667), (0.24706, 0.24353, 0.26157)),
     ])
 
     # Setup dataset.
@@ -210,7 +214,7 @@ def main(args):
     dataloader_test  = torch.utils.data.DataLoader(dataset_test , shuffle=False, **dl_common_args)
 
     # Create NN model instance.
-    model_common_args = {"gpb_layer_pos": args.gpb_layer_pos, "std_error": args.gpb_std_error, "pretrain": args.use_pretrain}
+    model_common_args = {"gpb_layer_pos": args.gpb_layer_pos, "std_error": args.gpb_std_error, "scale": args.gpb_scale, "pretrain": args.use_pretrain}
     if   args.model == "lenet5"  : model = LeNet5(num_classes, **model_common_args)
     elif args.model == "resnet18": model = ResNet18(num_classes, **model_common_args)
     model.to(args.device)
@@ -220,15 +224,14 @@ def main(args):
     loss_func = torch.nn.CrossEntropyLoss(reduction="mean", label_smoothing=0.1)
 
     # Setup optimizer.
-    optimizer = torch.optim.SGD(model.parameters(), lr=1.0E-4, momentum=0.9, weight_decay=5.0E-4)
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.01, steps_per_epoch=len(dataloader_train), epochs=args.epochs)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.05, momentum=0.9, weight_decay=5.0E-4)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.1, steps_per_epoch=len(dataloader_train), epochs=args.epochs)
 
     for epoch in range(1, args.epochs + 1):
 
         # Change scale of GPB layers if decreasing epochs specified.
-        if args.gpb_dec_epochs is not None and (epoch > (args.epochs - args.gpb_dec_epochs)):
-            scale = (args.epochs - epoch) / args.gpb_dec_epochs
-            model = update_gpbl_scale(model, scale)
+        if args.gpb_disable_epochs is not None and (epoch > (args.epochs - args.gpb_disable_epochs)):
+            model = update_gpbl_scale(model, 0.0)
 
         # Train the model for one epoch and get metrics.
         result_train = train(model, dataloader_train, loss_func, num_classes, optimizer, scheduler)

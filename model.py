@@ -54,20 +54,30 @@ class GaussianProcessBootstrapping(torch.nn.Module):
         if self.P is None:
             self.P = torch.zeros((X.shape[1], X.shape[1]), requires_grad=False, device=X.device)
 
-        with torch.no_grad():
-            X_copy = X.clone().detach()
-            self.P = self.a * self.P + (1.0 - self.a) * torch.matmul(torch.transpose(X_copy, 0, 1), X_copy)
-            self.s = max(-1, self.s - 1)
+        # with torch.no_grad():
+        #     X_copy = X.clone().detach()
+        #     self.P = self.a * self.P + (1.0 - self.a) * torch.matmul(torch.transpose(X_copy, 0, 1), X_copy)
+        #     self.s = max(-1, self.s - 1)
+
+        X_copy = X.clone().detach()
+        self.P = self.a * self.P + (1.0 - self.a) * torch.matmul(torch.transpose(X_copy, 0, 1), X_copy)
+        self.s = max(-1, self.s - 1)
 
         if self.s >= 0:
             return X
 
-        with torch.no_grad():
-            e = self.e
-            P = self.P.clone().detach().double()
-            I = torch.eye(P.shape[0], device=P.device, dtype=P.dtype)
-            S = I - torch.linalg.solve(P + e * I, P)
-            M = (I - torch.matmul(P, S) / e).float()
+        # with torch.no_grad():
+        #     e = self.e
+        #     P = self.P.clone().detach().double()
+        #     I = torch.eye(P.shape[0], device=P.device, dtype=P.dtype)
+        #     S = I - torch.linalg.solve(P + e * I, P)
+        #     M = (I - torch.matmul(P, S) / e).float()
+
+        e = self.e
+        P = self.P.clone().detach().double()
+        I = torch.eye(P.shape[0], device=P.device, dtype=P.dtype)
+        S = I - torch.linalg.solve(P + e * I, P)
+        M = (I - torch.matmul(P, S) / e).float()
 
         # NOTE: In the above code, (P + e * I)^-1 @ P was solved by `torch.linalg.solve` function,
         #       but we also be able to use `torch.linalg.lstsq` function instead. The author don't
@@ -75,9 +85,12 @@ class GaussianProcessBootstrapping(torch.nn.Module):
         #         >> S = I - torch.linalg.solve(P + e * I, P)    # Current code
         #         >> S = I - torch.linalg.lstsq(P + e * I, P)[0] # This is also acceptable
 
-        with torch.no_grad():
-            V = torch.sum(torch.matmul(X, M) * X, dim=1, keepdim=True)
-            N = torch.sqrt(torch.clip(V, min=1.0E-10, max=None)) * torch.randn(X.shape, device=X.device)
+        # with torch.no_grad():
+        #     V = torch.sum(torch.matmul(X, M) * X, dim=1, keepdim=True)
+        #     N = torch.sqrt(torch.clip(V, min=1.0E-10, max=None)) * torch.randn(X.shape, device=X.device)
+
+        V = torch.sum(torch.matmul(X, M) * X, dim=1, keepdim=True)
+        N = torch.sqrt(torch.clip(V, min=1.0E-10, max=None)) * torch.randn(X.shape, device=X.device)
 
         return X + self.k * N
 
